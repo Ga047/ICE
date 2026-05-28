@@ -196,14 +196,14 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/Ga0Y1u/ICE.git
+git clone https://github.com/Ga047/ICE.git
 cd ICE
 
 # 安装依赖
 pip install -r requirements.txt
 
 # 运行
-python main.py
+python ICE.py
 ```
 
 ## 更新日志
